@@ -1010,7 +1010,28 @@ fn stage_str(stage: Stage) -> &'static str {
     }
 }
 
+#[cfg(unix)]
+fn raise_fd_limit() {
+    unsafe {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+            let target = std::cmp::min(10240, rlim.rlim_max);
+            if rlim.rlim_cur < target {
+                rlim.rlim_cur = target;
+                let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn raise_fd_limit() {}
+
 fn main() -> anyhow::Result<()> {
+    raise_fd_limit();
     codex_build_info::initialize!();
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {

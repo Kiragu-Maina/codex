@@ -18,6 +18,8 @@ struct SystemCheckInputs {
     pager_env: BTreeMap<String, String>,
     user_resolution_detail: Option<String>,
     user_resolution_warning: Option<String>,
+    fd_limit_detail: Option<String>,
+    fd_limit_warning: Option<String>,
 }
 
 impl SystemCheckInputs {
@@ -67,6 +69,33 @@ impl SystemCheckInputs {
         };
         #[cfg(not(unix))]
         let (user_resolution_detail, user_resolution_warning) = (None, None);
+
+        #[cfg(unix)]
+        let (fd_limit_detail, fd_limit_warning) = {
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } == 0 {
+                let cur = rlim.rlim_cur;
+                let max = rlim.rlim_max;
+                if cur <= 256 {
+                    (
+                        Some(format!("open files limit: soft {cur}, hard {max} (low)")),
+                        Some(format!(
+                            "Open file limit is {cur} (default macOS launchd limit). Codex daemon and MCP servers typically require 300+ file descriptors."
+                        )),
+                    )
+                } else {
+                    (Some(format!("open files limit: soft {cur}, hard {max}")), None)
+                }
+            } else {
+                (None, None)
+            }
+        };
+        #[cfg(not(unix))]
+        let (fd_limit_detail, fd_limit_warning) = (None, None);
+
         Self {
             os: info.to_string(),
             os_type: info.os_type().to_string(),
@@ -77,6 +106,8 @@ impl SystemCheckInputs {
             pager_env,
             user_resolution_detail,
             user_resolution_warning,
+            fd_limit_detail,
+            fd_limit_warning,
         }
     }
 }
@@ -114,8 +145,16 @@ fn system_check_from_inputs(inputs: SystemCheckInputs) -> DoctorCheck {
     if let Some(user_detail) = inputs.user_resolution_detail {
         details.push(user_detail);
     }
+    if let Some(fd_detail) = inputs.fd_limit_detail {
+        details.push(fd_detail);
+    }
 
-    let summary = if let Some(warning) = &inputs.user_resolution_warning {
+    let warning_message = inputs
+        .user_resolution_warning
+        .as_ref()
+        .or(inputs.fd_limit_warning.as_ref());
+
+    let summary = if let Some(warning) = warning_message {
         warning.clone()
     } else {
         inputs
@@ -125,7 +164,7 @@ fn system_check_from_inputs(inputs: SystemCheckInputs) -> DoctorCheck {
             .unwrap_or_else(|| "OS language unavailable".to_string())
     };
 
-    let status = if inputs.user_resolution_warning.is_some() {
+    let status = if warning_message.is_some() {
         super::CheckStatus::Warning
     } else {
         super::CheckStatus::Ok
@@ -134,6 +173,8 @@ fn system_check_from_inputs(inputs: SystemCheckInputs) -> DoctorCheck {
     let mut check = DoctorCheck::new("system.environment", "system", status, summary).details(details);
     if inputs.user_resolution_warning.is_some() {
         check = check.remediation("Try restarting the background daemon with: codex app-server daemon restart");
+    } else if inputs.fd_limit_warning.is_some() {
+        check = check.remediation("Raise open files limit with 'ulimit -n 10240' before launching codex");
     }
     check
 }
@@ -168,6 +209,8 @@ mod tests {
             pager_env,
             user_resolution_detail: None,
             user_resolution_warning: None,
+            fd_limit_detail: None,
+            fd_limit_warning: None,
         });
 
         assert_eq!(check.summary, "OS language en-US");
@@ -204,6 +247,8 @@ mod tests {
             pager_env: BTreeMap::new(),
             user_resolution_detail: None,
             user_resolution_warning: None,
+            fd_limit_detail: None,
+            fd_limit_warning: None,
         });
 
         assert_eq!(check.summary, "OS language unavailable");

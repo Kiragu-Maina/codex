@@ -140,6 +140,20 @@ impl PidBackend {
                     if libc::setsid() == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
+                    // Ensure the daemon process has sufficient file descriptors.
+                    // On macOS, launchd defaults soft RLIMIT_NOFILE to 256, which
+                    // exhausts quickly with multiple databases, MCP servers, and IPC sockets.
+                    let mut rlim = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
+                    if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+                        let target = std::cmp::min(10240, rlim.rlim_max);
+                        if rlim.rlim_cur < target {
+                            rlim.rlim_cur = target;
+                            let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);
+                        }
+                    }
                     Ok(())
                 });
             }
