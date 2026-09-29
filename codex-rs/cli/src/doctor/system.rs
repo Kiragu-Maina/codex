@@ -16,6 +16,8 @@ struct SystemCheckInputs {
     locale_env: BTreeMap<String, String>,
     editor_env: BTreeMap<String, String>,
     pager_env: BTreeMap<String, String>,
+    user_resolution_detail: Option<String>,
+    user_resolution_warning: Option<String>,
 }
 
 impl SystemCheckInputs {
@@ -45,6 +47,26 @@ impl SystemCheckInputs {
                     .map(|value| ((*name).to_string(), value.to_string_lossy().into_owned()))
             })
             .collect();
+        #[cfg(unix)]
+        let (user_resolution_detail, user_resolution_warning) = {
+            let uid = unsafe { libc::getuid() };
+            let pw = unsafe { libc::getpwuid(uid) };
+            if pw.is_null() {
+                (
+                    Some(format!("user lookup: failed for uid {uid}")),
+                    Some(format!(
+                        "Local user lookup failed for UID {uid}. On macOS, this indicates degraded Directory Services / opendirectoryd IPC in the launch context."
+                    )),
+                )
+            } else {
+                let name = unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) }
+                    .to_string_lossy()
+                    .into_owned();
+                (Some(format!("user: {name} (uid {uid})")), None)
+            }
+        };
+        #[cfg(not(unix))]
+        let (user_resolution_detail, user_resolution_warning) = (None, None);
         Self {
             os: info.to_string(),
             os_type: info.os_type().to_string(),
@@ -53,6 +75,8 @@ impl SystemCheckInputs {
             locale_env,
             editor_env,
             pager_env,
+            user_resolution_detail,
+            user_resolution_warning,
         }
     }
 }
@@ -87,19 +111,31 @@ fn system_check_from_inputs(inputs: SystemCheckInputs) -> DoctorCheck {
             details.push(format!("{name}: {value}"));
         }
     }
+    if let Some(user_detail) = inputs.user_resolution_detail {
+        details.push(user_detail);
+    }
 
-    let summary = inputs
-        .os_language
-        .as_deref()
-        .map(|language| format!("OS language {language}"))
-        .unwrap_or_else(|| "OS language unavailable".to_string());
-    DoctorCheck::new(
-        "system.environment",
-        "system",
-        super::CheckStatus::Ok,
-        summary,
-    )
-    .details(details)
+    let summary = if let Some(warning) = &inputs.user_resolution_warning {
+        warning.clone()
+    } else {
+        inputs
+            .os_language
+            .as_deref()
+            .map(|language| format!("OS language {language}"))
+            .unwrap_or_else(|| "OS language unavailable".to_string())
+    };
+
+    let status = if inputs.user_resolution_warning.is_some() {
+        super::CheckStatus::Warning
+    } else {
+        super::CheckStatus::Ok
+    };
+
+    let mut check = DoctorCheck::new("system.environment", "system", status, summary).details(details);
+    if inputs.user_resolution_warning.is_some() {
+        check = check.remediation("Try restarting the background daemon with: codex app-server daemon restart");
+    }
+    check
 }
 
 #[cfg(test)]
@@ -130,6 +166,8 @@ mod tests {
             locale_env,
             editor_env,
             pager_env,
+            user_resolution_detail: None,
+            user_resolution_warning: None,
         });
 
         assert_eq!(check.summary, "OS language en-US");
@@ -164,6 +202,8 @@ mod tests {
                 ("VISUAL".to_string(), "not set".to_string()),
             ]),
             pager_env: BTreeMap::new(),
+            user_resolution_detail: None,
+            user_resolution_warning: None,
         });
 
         assert_eq!(check.summary, "OS language unavailable");

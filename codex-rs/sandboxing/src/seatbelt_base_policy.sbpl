@@ -89,6 +89,8 @@
 ; needed to look up user info, see https://crbug.com/792228
 (allow mach-lookup
   (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.opendirectoryd.api")
+  (global-name "com.apple.system.DirectoryService.libinfo_v1")
 )
 
 ; Needed for python multiprocessing on MacOS for the SemLock

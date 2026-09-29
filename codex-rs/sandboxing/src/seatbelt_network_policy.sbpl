@@ -2,8 +2,9 @@
 ; proxy-specific allow rules are injected by codex-core based on environment.
 ; Ref https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/network.sb;drc=f8f264d5e4e7509c913f4c60c2639d15905a07e4
 
-; allow only safe AF_SYSTEM sockets used for local platform services.
+; allow safe AF_SYSTEM and AF_UNIX sockets used for local platform and resolver services.
 (allow system-socket
+  (socket-domain AF_UNIX)
   (require-all
     (socket-domain AF_SYSTEM)
     (socket-protocol 2)
@@ -24,6 +25,13 @@
     ; Read network configuration.
     (global-name "com.apple.SystemConfiguration.DNSConfiguration")
     (global-name "com.apple.SystemConfiguration.configd")
+    (global-name "com.apple.dnssd.service")
+)
+
+; allow communication with the macOS mDNSResponder resolver socket
+(allow network-outbound
+  (literal "/private/var/run/mDNSResponder")
+  (literal "/var/run/mDNSResponder")
 )
 
 (allow sysctl-read
